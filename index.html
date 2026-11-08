@@ -77,6 +77,12 @@
       border: none;
     }
 
+    .use-video {
+      background: #fff;
+      color: #111;
+      border: none;
+    }
+
     #timer {
       font-size: 24px;
       margin: 12px;
@@ -98,6 +104,7 @@
 
 <body>
   <main class="container">
+
     <h1>SOMEDAY</h1>
     <p>A message from who you used to be.</p>
 
@@ -110,24 +117,35 @@
 
     <div>
       <button id="cameraBtn">Enable Camera</button>
-      <button id="recordBtn" class="record" disabled>● Record</button>
+      <button id="recordBtn" class="record" disabled>
+        ● Record
+      </button>
       <button id="stopBtn" disabled>Stop</button>
       <button id="retakeBtn" disabled>Retake</button>
+      <button id="useVideoBtn" class="use-video" disabled>
+        Use this video
+      </button>
     </div>
 
     <p id="status">Camera is not active.</p>
+
   </main>
 
   <script>
+    // ELEMENTS
     const camera = document.getElementById("camera");
     const playback = document.getElementById("playback");
+
     const cameraBtn = document.getElementById("cameraBtn");
     const recordBtn = document.getElementById("recordBtn");
     const stopBtn = document.getElementById("stopBtn");
     const retakeBtn = document.getElementById("retakeBtn");
+    const useVideoBtn = document.getElementById("useVideoBtn");
+
     const timer = document.getElementById("timer");
     const status = document.getElementById("status");
 
+    // RECORDER STATE
     let stream = null;
     let recorder = null;
     let chunks = [];
@@ -136,20 +154,34 @@
     let timerInterval = null;
     let seconds = 0;
 
+    const MAX_DURATION = 60;
+    const MAX_SIZE = 10 * 1024 * 1024;
+
+    // TIMER
     function updateTimer() {
-      const min = String(Math.floor(seconds / 60)).padStart(2, "0");
-      const sec = String(seconds % 60).padStart(2, "0");
+      const min = String(
+        Math.floor(seconds / 60)
+      ).padStart(2, "0");
+
+      const sec = String(
+        seconds % 60
+      ).padStart(2, "0");
+
       timer.textContent = `${min}:${sec}`;
     }
 
+    // CAMERA
     async function enableCamera() {
       try {
-        status.textContent = "Requesting camera and microphone permission...";
+        status.textContent =
+          "Requesting camera and microphone permission...";
 
-        if (!navigator.mediaDevices ||
-            !navigator.mediaDevices.getUserMedia) {
+        if (
+          !navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia
+        ) {
           throw new Error(
-            "Camera API unavailable. Please open this page using HTTPS."
+            "Camera API unavailable. Please use HTTPS."
           );
         }
 
@@ -161,6 +193,7 @@
         });
 
         camera.srcObject = stream;
+
         camera.classList.remove("hidden");
         playback.classList.add("hidden");
 
@@ -168,32 +201,69 @@
         cameraBtn.disabled = true;
 
         status.textContent = "Camera ready.";
+
       } catch (error) {
         status.textContent =
           error.name + ": " + error.message;
+
         console.error(error);
       }
     }
 
-    function startRecording() {
-      chunks = [];
-      seconds = 0;
-      updateTimer();
-
-      let options = {};
-
+    // RECORDING FORMAT
+    function getRecordingOptions() {
       if (MediaRecorder.isTypeSupported("video/mp4")) {
-        options.mimeType = "video/mp4";
-      } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
-        options.mimeType = "video/webm;codecs=vp9";
-      } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
-        options.mimeType = "video/webm;codecs=vp8";
-      } else if (MediaRecorder.isTypeSupported("video/webm")) {
-        options.mimeType = "video/webm";
+        return { mimeType: "video/mp4" };
       }
 
+      if (
+        MediaRecorder.isTypeSupported(
+          "video/webm;codecs=vp9"
+        )
+      ) {
+        return {
+          mimeType: "video/webm;codecs=vp9"
+        };
+      }
+
+      if (
+        MediaRecorder.isTypeSupported(
+          "video/webm;codecs=vp8"
+        )
+      ) {
+        return {
+          mimeType: "video/webm;codecs=vp8"
+        };
+      }
+
+      if (MediaRecorder.isTypeSupported("video/webm")) {
+        return { mimeType: "video/webm" };
+      }
+
+      return {};
+    }
+
+    // START RECORDING
+    function startRecording() {
+      if (!stream) {
+        status.textContent = "Please enable your camera first.";
+        return;
+      }
+
+      chunks = [];
+      recordedBlob = null;
+      seconds = 0;
+
+      updateTimer();
+
+      useVideoBtn.disabled = true;
+      retakeBtn.disabled = true;
+
       try {
-        recorder = new MediaRecorder(stream, options);
+        recorder = new MediaRecorder(
+          stream,
+          getRecordingOptions()
+        );
 
         recorder.ondataavailable = event => {
           if (event.data && event.data.size > 0) {
@@ -201,32 +271,12 @@
           }
         };
 
-        recorder.onstop = () => {
-          recordedBlob = new Blob(chunks, {
-            type: recorder.mimeType
-          });
-
-          playbackUrl = URL.createObjectURL(recordedBlob);
-          playback.src = playbackUrl;
-
-          camera.classList.add("hidden");
-          playback.classList.remove("hidden");
-
-          recordBtn.disabled = true;
-          stopBtn.disabled = true;
-          retakeBtn.disabled = false;
-
-          status.textContent =
-            "Recording complete. Size: " +
-            (recordedBlob.size / 1024 / 1024).toFixed(2) +
-            " MB. Format: " + recordedBlob.type;
-        };
+        recorder.onstop = finishRecording;
 
         recorder.start();
 
         recordBtn.disabled = true;
         stopBtn.disabled = false;
-        retakeBtn.disabled = true;
 
         status.textContent = "Recording...";
 
@@ -234,25 +284,84 @@
           seconds++;
           updateTimer();
 
-          if (seconds >= 60) {
+          if (seconds >= MAX_DURATION) {
             stopRecording();
           }
         }, 1000);
 
       } catch (error) {
-        status.textContent = error.name + ": " + error.message;
+        status.textContent =
+          error.name + ": " + error.message;
+
         console.error(error);
       }
     }
 
+    // STOP RECORDING
     function stopRecording() {
       clearInterval(timerInterval);
 
-      if (recorder && recorder.state === "recording") {
+      if (
+        recorder &&
+        recorder.state === "recording"
+      ) {
         recorder.stop();
       }
     }
 
+    // FINISH RECORDING
+    function finishRecording() {
+      recordedBlob = new Blob(chunks, {
+        type: recorder.mimeType
+      });
+
+      recordBtn.disabled = true;
+      stopBtn.disabled = true;
+
+      if (recordedBlob.size > MAX_SIZE) {
+        recordedBlob = null;
+
+        retakeBtn.disabled = false;
+        useVideoBtn.disabled = true;
+
+        status.textContent =
+          "Video exceeds 10 MB. Please record again.";
+
+        return;
+      }
+
+      if (recordedBlob.size === 0) {
+        recordedBlob = null;
+
+        retakeBtn.disabled = false;
+        useVideoBtn.disabled = true;
+
+        status.textContent =
+          "Recording is empty. Please try again.";
+
+        return;
+      }
+
+      if (playbackUrl) {
+        URL.revokeObjectURL(playbackUrl);
+      }
+
+      playbackUrl = URL.createObjectURL(recordedBlob);
+      playback.src = playbackUrl;
+
+      camera.classList.add("hidden");
+      playback.classList.remove("hidden");
+
+      retakeBtn.disabled = false;
+      useVideoBtn.disabled = false;
+
+      status.textContent =
+        "Recording complete. Size: " +
+        (recordedBlob.size / 1024 / 1024).toFixed(2) +
+        " MB. Format: " + recordedBlob.type;
+    }
+
+    // RETAKE
     function retakeRecording() {
       recordedBlob = null;
       chunks = [];
@@ -263,7 +372,8 @@
       }
 
       playback.pause();
-      playback.src = "";
+      playback.removeAttribute("src");
+      playback.load();
 
       camera.classList.remove("hidden");
       playback.classList.add("hidden");
@@ -274,16 +384,88 @@
       recordBtn.disabled = false;
       stopBtn.disabled = true;
       retakeBtn.disabled = true;
+      useVideoBtn.disabled = true;
 
-      status.textContent = "Camera ready. You can record again.";
+      status.textContent =
+        "Camera ready. You can record again.";
     }
 
-    cameraBtn.addEventListener("click", enableCamera);
-    recordBtn.addEventListener("click", startRecording);
-    stopBtn.addEventListener("click", stopRecording);
-    retakeBtn.addEventListener("click", retakeRecording);
+    // SEND RECORDING TO SOMEDAY
+    function sendRecordingToSomeday() {
+      if (!recordedBlob) {
+        status.textContent =
+          "No recording available.";
 
+        return;
+      }
+
+      if (recordedBlob.size > MAX_SIZE) {
+        status.textContent =
+          "Video must be 10 MB or smaller.";
+
+        return;
+      }
+
+      if (!window.opener || window.opener.closed) {
+        status.textContent =
+          "Please open this recorder from your SOMEDAY app.";
+
+        return;
+      }
+
+      try {
+        window.opener.postMessage(
+          {
+            type: "SOMEDAY_RECORDER_VIDEO",
+            video: recordedBlob,
+            mimeType: recordedBlob.type
+          },
+          "*"
+        );
+
+        useVideoBtn.disabled = true;
+
+        status.textContent =
+          "Video sent to SOMEDAY. Return to your capsule.";
+
+      } catch (error) {
+        status.textContent =
+          "Unable to send video: " + error.message;
+
+        console.error(error);
+      }
+    }
+
+    // EVENT LISTENERS
+    cameraBtn.addEventListener(
+      "click",
+      enableCamera
+    );
+
+    recordBtn.addEventListener(
+      "click",
+      startRecording
+    );
+
+    stopBtn.addEventListener(
+      "click",
+      stopRecording
+    );
+
+    retakeBtn.addEventListener(
+      "click",
+      retakeRecording
+    );
+
+    useVideoBtn.addEventListener(
+      "click",
+      sendRecordingToSomeday
+    );
+
+    // CLEANUP
     window.addEventListener("beforeunload", () => {
+      clearInterval(timerInterval);
+
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
