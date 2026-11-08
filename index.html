@@ -1,0 +1,299 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SOMEDAY — Recorder</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #101010;
+      color: #f5f5f5;
+      font-family: Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 480px;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 400;
+      letter-spacing: 4px;
+    }
+
+    p {
+      color: #999;
+      font-size: 14px;
+    }
+
+    .preview {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      max-height: 65vh;
+      background: #222;
+      border-radius: 12px;
+      overflow: hidden;
+      margin: 24px 0;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    button {
+      border: 1px solid #555;
+      background: transparent;
+      color: white;
+      padding: 14px 20px;
+      border-radius: 30px;
+      margin: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    .record {
+      background: #fff;
+      color: #111;
+      border: none;
+    }
+
+    #timer {
+      font-size: 24px;
+      margin: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #status {
+      min-height: 40px;
+      line-height: 1.5;
+      color: #bbb;
+      overflow-wrap: anywhere;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="container">
+    <h1>SOMEDAY</h1>
+    <p>A message from who you used to be.</p>
+
+    <div class="preview">
+      <video id="camera" autoplay muted playsinline></video>
+      <video id="playback" controls playsinline class="hidden"></video>
+    </div>
+
+    <div id="timer">00:00</div>
+
+    <div>
+      <button id="cameraBtn">Enable Camera</button>
+      <button id="recordBtn" class="record" disabled>● Record</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <button id="retakeBtn" disabled>Retake</button>
+    </div>
+
+    <p id="status">Camera is not active.</p>
+  </main>
+
+  <script>
+    const camera = document.getElementById("camera");
+    const playback = document.getElementById("playback");
+    const cameraBtn = document.getElementById("cameraBtn");
+    const recordBtn = document.getElementById("recordBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const retakeBtn = document.getElementById("retakeBtn");
+    const timer = document.getElementById("timer");
+    const status = document.getElementById("status");
+
+    let stream = null;
+    let recorder = null;
+    let chunks = [];
+    let recordedBlob = null;
+    let playbackUrl = null;
+    let timerInterval = null;
+    let seconds = 0;
+
+    function updateTimer() {
+      const min = String(Math.floor(seconds / 60)).padStart(2, "0");
+      const sec = String(seconds % 60).padStart(2, "0");
+      timer.textContent = `${min}:${sec}`;
+    }
+
+    async function enableCamera() {
+      try {
+        status.textContent = "Requesting camera and microphone permission...";
+
+        if (!navigator.mediaDevices ||
+            !navigator.mediaDevices.getUserMedia) {
+          throw new Error(
+            "Camera API unavailable. Please open this page using HTTPS."
+          );
+        }
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "user"
+          },
+          audio: true
+        });
+
+        camera.srcObject = stream;
+        camera.classList.remove("hidden");
+        playback.classList.add("hidden");
+
+        recordBtn.disabled = false;
+        cameraBtn.disabled = true;
+
+        status.textContent = "Camera ready.";
+      } catch (error) {
+        status.textContent =
+          error.name + ": " + error.message;
+        console.error(error);
+      }
+    }
+
+    function startRecording() {
+      chunks = [];
+      seconds = 0;
+      updateTimer();
+
+      let options = {};
+
+      if (MediaRecorder.isTypeSupported("video/mp4")) {
+        options.mimeType = "video/mp4";
+      } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
+        options.mimeType = "video/webm;codecs=vp9";
+      } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
+        options.mimeType = "video/webm;codecs=vp8";
+      } else if (MediaRecorder.isTypeSupported("video/webm")) {
+        options.mimeType = "video/webm";
+      }
+
+      try {
+        recorder = new MediaRecorder(stream, options);
+
+        recorder.ondataavailable = event => {
+          if (event.data && event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        recorder.onstop = () => {
+          recordedBlob = new Blob(chunks, {
+            type: recorder.mimeType
+          });
+
+          playbackUrl = URL.createObjectURL(recordedBlob);
+          playback.src = playbackUrl;
+
+          camera.classList.add("hidden");
+          playback.classList.remove("hidden");
+
+          recordBtn.disabled = true;
+          stopBtn.disabled = true;
+          retakeBtn.disabled = false;
+
+          status.textContent =
+            "Recording complete. Size: " +
+            (recordedBlob.size / 1024 / 1024).toFixed(2) +
+            " MB. Format: " + recordedBlob.type;
+        };
+
+        recorder.start();
+
+        recordBtn.disabled = true;
+        stopBtn.disabled = false;
+        retakeBtn.disabled = true;
+
+        status.textContent = "Recording...";
+
+        timerInterval = setInterval(() => {
+          seconds++;
+          updateTimer();
+
+          if (seconds >= 60) {
+            stopRecording();
+          }
+        }, 1000);
+
+      } catch (error) {
+        status.textContent = error.name + ": " + error.message;
+        console.error(error);
+      }
+    }
+
+    function stopRecording() {
+      clearInterval(timerInterval);
+
+      if (recorder && recorder.state === "recording") {
+        recorder.stop();
+      }
+    }
+
+    function retakeRecording() {
+      recordedBlob = null;
+      chunks = [];
+
+      if (playbackUrl) {
+        URL.revokeObjectURL(playbackUrl);
+        playbackUrl = null;
+      }
+
+      playback.pause();
+      playback.src = "";
+
+      camera.classList.remove("hidden");
+      playback.classList.add("hidden");
+
+      seconds = 0;
+      updateTimer();
+
+      recordBtn.disabled = false;
+      stopBtn.disabled = true;
+      retakeBtn.disabled = true;
+
+      status.textContent = "Camera ready. You can record again.";
+    }
+
+    cameraBtn.addEventListener("click", enableCamera);
+    recordBtn.addEventListener("click", startRecording);
+    stopBtn.addEventListener("click", stopRecording);
+    retakeBtn.addEventListener("click", retakeRecording);
+
+    window.addEventListener("beforeunload", () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+
+      if (playbackUrl) {
+        URL.revokeObjectURL(playbackUrl);
+      }
+    });
+  </script>
+</body>
+</html>
+```
