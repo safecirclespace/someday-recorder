@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SOMEDAY — Recorder</title>
+  <title>SOMEDAY — Secure Access & Recorder</title>
+
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <style>
     * {
@@ -34,9 +37,29 @@
       letter-spacing: 4px;
     }
 
+    h2 {
+      font-size: 17px;
+      font-weight: 400;
+      margin-top: 35px;
+    }
+
     p {
       color: #999;
       font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .section {
+      border: 1px solid #333;
+      border-radius: 12px;
+      padding: 25px 18px;
+      margin-top: 25px;
+    }
+
+    .divider {
+      height: 1px;
+      background: #333;
+      margin: 30px 0;
     }
 
     .preview {
@@ -71,12 +94,7 @@
       cursor: not-allowed;
     }
 
-    .record {
-      background: #fff;
-      color: #111;
-      border: none;
-    }
-
+    .record,
     .use-video {
       background: #fff;
       color: #111;
@@ -89,15 +107,38 @@
       font-variant-numeric: tabular-nums;
     }
 
-    #status {
+    #status,
+    #authStatus {
       min-height: 40px;
       line-height: 1.5;
       color: #bbb;
       overflow-wrap: anywhere;
+      font-size: 12px;
+      margin-top: 18px;
+    }
+
+    .hint {
+      color: #777;
+      font-size: 11px;
     }
 
     .hidden {
-      display: none;
+      display: none !important;
+    }
+
+    #googleSignIn {
+      display: flex;
+      justify-content: center;
+      margin-top: 20px;
+      min-height: 44px;
+    }
+
+    .success {
+      color: #b8c9a8 !important;
+    }
+
+    .warning {
+      color: #d6b47d !important;
     }
   </style>
 </head>
@@ -108,44 +149,199 @@
     <h1>SOMEDAY</h1>
     <p>A message from who you used to be.</p>
 
-    <div class="preview">
-      <video id="camera" autoplay muted playsinline></video>
-      <video id="playback" controls playsinline class="hidden"></video>
-    </div>
+    <!-- GOOGLE AUTHENTICATION -->
+    <section class="section">
+      <h2>Secure access</h2>
 
-    <div id="timer">00:00</div>
+      <p>
+        Sign in with your Google account to access
+        your personal SOMEDAY time capsules.
+      </p>
 
-    <div>
-      <button id="cameraBtn">Enable Camera</button>
-      <button id="recordBtn" class="record" disabled>
-        ● Record
-      </button>
-      <button id="stopBtn" disabled>Stop</button>
-      <button id="retakeBtn" disabled>Retake</button>
-      <button id="useVideoBtn" class="use-video" disabled>
-        Use this video
-      </button>
-    </div>
+      <div id="googleSignIn"></div>
 
-    <p id="status">Camera is not active.</p>
+      <p id="authStatus">
+        Sign in to connect your Google account with SOMEDAY.
+      </p>
+    </section>
+
+    <div class="divider"></div>
+
+    <!-- VIDEO RECORDER -->
+    <section>
+      <h2>Video recorder</h2>
+
+      <p>
+        Record a short message for your future self.
+        Maximum duration: 60 seconds.
+      </p>
+
+      <div class="preview">
+        <video id="camera" autoplay muted playsinline></video>
+        <video id="playback" controls playsinline class="hidden"></video>
+      </div>
+
+      <div id="timer">00:00</div>
+
+      <div>
+        <button id="cameraBtn">Enable Camera</button>
+
+        <button id="recordBtn" class="record" disabled>
+          ● Record
+        </button>
+
+        <button id="stopBtn" disabled>
+          Stop
+        </button>
+
+        <button id="retakeBtn" disabled>
+          Retake
+        </button>
+
+        <button id="useVideoBtn" class="use-video" disabled>
+          Use this video
+        </button>
+      </div>
+
+      <p id="status">Camera is not active.</p>
+      <p class="hint">Maximum video size: 10 MB.</p>
+    </section>
 
   </main>
 
   <script>
+    // =====================================================
+    // CONFIGURATION
+    // =====================================================
+
+    const GOOGLE_CLIENT_ID = '961324985762-a8vmgb8gb0llg2g76mts90ndr4nht64v.apps.googleusercontent.com';
+
+    const MAX_DURATION = 60;
+    const MAX_SIZE = 10 * 1024 * 1024;
+
+    // =====================================================
     // ELEMENTS
-    const camera = document.getElementById("camera");
-    const playback = document.getElementById("playback");
+    // =====================================================
 
-    const cameraBtn = document.getElementById("cameraBtn");
-    const recordBtn = document.getElementById("recordBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const retakeBtn = document.getElementById("retakeBtn");
-    const useVideoBtn = document.getElementById("useVideoBtn");
+    const camera = document.getElementById('camera');
+    const playback = document.getElementById('playback');
 
-    const timer = document.getElementById("timer");
-    const status = document.getElementById("status");
+    const cameraBtn = document.getElementById('cameraBtn');
+    const recordBtn = document.getElementById('recordBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const retakeBtn = document.getElementById('retakeBtn');
+    const useVideoBtn = document.getElementById('useVideoBtn');
 
+    const timer = document.getElementById('timer');
+    const status = document.getElementById('status');
+    const authStatus = document.getElementById('authStatus');
+
+    // =====================================================
+    // AUTHENTICATION STATE
+    // =====================================================
+
+    let googleSignInInitialized = false;
+    let authMessageSent = false;
+
+    function sendIdentityToSomeday(idToken) {
+      if (!idToken) {
+        authStatus.textContent =
+          'Google sign-in did not return a valid credential.';
+        return;
+      }
+
+      if (!window.opener || window.opener.closed) {
+        authStatus.textContent =
+          'Please open this page from your SOMEDAY application.';
+        return;
+      }
+
+      try {
+        window.opener.postMessage(
+          {
+            type: 'SOMEDAY_GOOGLE_AUTH',
+            credential: idToken
+          },
+          '*'
+        );
+
+        authMessageSent = true;
+
+        authStatus.textContent =
+          'Google account connected. Return to your SOMEDAY application.';
+
+        authStatus.classList.add('success');
+
+      } catch (error) {
+        authStatus.textContent =
+          'Unable to connect your Google account: ' + error.message;
+
+        console.error(error);
+      }
+    }
+
+    function handleGoogleCredential(response) {
+      if (!response || !response.credential) {
+        authStatus.textContent =
+          'Google authentication failed. Please try again.';
+        return;
+      }
+
+      sendIdentityToSomeday(response.credential);
+    }
+
+    function initializeGoogleSignIn() {
+      if (googleSignInInitialized) return;
+
+      if (
+        typeof google === 'undefined' ||
+        !google.accounts ||
+        !google.accounts.id
+      ) {
+        authStatus.textContent =
+          'Google Sign-In is still loading. Please wait a moment.';
+
+        setTimeout(initializeGoogleSignIn, 500);
+        return;
+      }
+
+      if (
+        !GOOGLE_CLIENT_ID ||
+        GOOGLE_CLIENT_ID === '961324985762-a8vmgb8gb0llg2g76mts90ndr4nht64v.apps.googleusercontent.com'
+      ) {
+        authStatus.textContent =
+          'Google OAuth Client ID has not been configured yet.';
+        return;
+      }
+
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+        auto_select: false,
+        cancel_on_tap_outside: true
+      });
+
+      google.accounts.id.renderButton(
+        document.getElementById('googleSignIn'),
+        {
+          theme: 'outline',
+          size: 'large',
+          shape: 'pill',
+          text: 'signin_with',
+          width: 260
+        }
+      );
+
+      googleSignInInitialized = true;
+
+      authStatus.textContent =
+        'You can now sign in with your Google account.';
+    }
+
+    // =====================================================
     // RECORDER STATE
+    // =====================================================
+
     let stream = null;
     let recorder = null;
     let chunks = [];
@@ -154,99 +350,113 @@
     let timerInterval = null;
     let seconds = 0;
 
-    const MAX_DURATION = 60;
-    const MAX_SIZE = 10 * 1024 * 1024;
-
+    // =====================================================
     // TIMER
+    // =====================================================
+
     function updateTimer() {
       const min = String(
         Math.floor(seconds / 60)
-      ).padStart(2, "0");
+      ).padStart(2, '0');
 
       const sec = String(
         seconds % 60
-      ).padStart(2, "0");
+      ).padStart(2, '0');
 
       timer.textContent = `${min}:${sec}`;
     }
 
+    // =====================================================
     // CAMERA
+    // =====================================================
+
     async function enableCamera() {
       try {
         status.textContent =
-          "Requesting camera and microphone permission...";
+          'Requesting camera and microphone permission...';
 
         if (
           !navigator.mediaDevices ||
           !navigator.mediaDevices.getUserMedia
         ) {
           throw new Error(
-            "Camera API unavailable. Please use HTTPS."
+            'Camera API unavailable. Please use HTTPS.'
           );
         }
 
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: "user"
+            facingMode: 'user'
           },
           audio: true
         });
 
         camera.srcObject = stream;
 
-        camera.classList.remove("hidden");
-        playback.classList.add("hidden");
+        camera.classList.remove('hidden');
+        playback.classList.add('hidden');
 
         recordBtn.disabled = false;
         cameraBtn.disabled = true;
 
-        status.textContent = "Camera ready.";
+        status.textContent = 'Camera ready.';
 
       } catch (error) {
         status.textContent =
-          error.name + ": " + error.message;
+          error.name + ': ' + error.message;
 
         console.error(error);
       }
     }
 
+    // =====================================================
     // RECORDING FORMAT
+    // =====================================================
+
     function getRecordingOptions() {
-      if (MediaRecorder.isTypeSupported("video/mp4")) {
-        return { mimeType: "video/mp4" };
-      }
-
-      if (
-        MediaRecorder.isTypeSupported(
-          "video/webm;codecs=vp9"
-        )
-      ) {
+      if (MediaRecorder.isTypeSupported('video/mp4')) {
         return {
-          mimeType: "video/webm;codecs=vp9"
+          mimeType: 'video/mp4'
         };
       }
 
       if (
         MediaRecorder.isTypeSupported(
-          "video/webm;codecs=vp8"
+          'video/webm;codecs=vp9'
         )
       ) {
         return {
-          mimeType: "video/webm;codecs=vp8"
+          mimeType: 'video/webm;codecs=vp9'
         };
       }
 
-      if (MediaRecorder.isTypeSupported("video/webm")) {
-        return { mimeType: "video/webm" };
+      if (
+        MediaRecorder.isTypeSupported(
+          'video/webm;codecs=vp8'
+        )
+      ) {
+        return {
+          mimeType: 'video/webm;codecs=vp8'
+        };
+      }
+
+      if (MediaRecorder.isTypeSupported('video/webm')) {
+        return {
+          mimeType: 'video/webm'
+        };
       }
 
       return {};
     }
 
+    // =====================================================
     // START RECORDING
+    // =====================================================
+
     function startRecording() {
       if (!stream) {
-        status.textContent = "Please enable your camera first.";
+        status.textContent =
+          'Please enable your camera first.';
         return;
       }
 
@@ -278,7 +488,7 @@
         recordBtn.disabled = true;
         stopBtn.disabled = false;
 
-        status.textContent = "Recording...";
+        status.textContent = 'Recording...';
 
         timerInterval = setInterval(() => {
           seconds++;
@@ -291,25 +501,31 @@
 
       } catch (error) {
         status.textContent =
-          error.name + ": " + error.message;
+          error.name + ': ' + error.message;
 
         console.error(error);
       }
     }
 
+    // =====================================================
     // STOP RECORDING
+    // =====================================================
+
     function stopRecording() {
       clearInterval(timerInterval);
 
       if (
         recorder &&
-        recorder.state === "recording"
+        recorder.state === 'recording'
       ) {
         recorder.stop();
       }
     }
 
+    // =====================================================
     // FINISH RECORDING
+    // =====================================================
+
     function finishRecording() {
       recordedBlob = new Blob(chunks, {
         type: recorder.mimeType
@@ -325,7 +541,7 @@
         useVideoBtn.disabled = true;
 
         status.textContent =
-          "Video exceeds 10 MB. Please record again.";
+          'Video exceeds 10 MB. Please record again.';
 
         return;
       }
@@ -337,7 +553,7 @@
         useVideoBtn.disabled = true;
 
         status.textContent =
-          "Recording is empty. Please try again.";
+          'Recording is empty. Please try again.';
 
         return;
       }
@@ -349,19 +565,22 @@
       playbackUrl = URL.createObjectURL(recordedBlob);
       playback.src = playbackUrl;
 
-      camera.classList.add("hidden");
-      playback.classList.remove("hidden");
+      camera.classList.add('hidden');
+      playback.classList.remove('hidden');
 
       retakeBtn.disabled = false;
       useVideoBtn.disabled = false;
 
       status.textContent =
-        "Recording complete. Size: " +
+        'Recording complete. Size: ' +
         (recordedBlob.size / 1024 / 1024).toFixed(2) +
-        " MB. Format: " + recordedBlob.type;
+        ' MB. Format: ' + recordedBlob.type;
     }
 
+    // =====================================================
     // RETAKE
+    // =====================================================
+
     function retakeRecording() {
       recordedBlob = null;
       chunks = [];
@@ -372,11 +591,11 @@
       }
 
       playback.pause();
-      playback.removeAttribute("src");
+      playback.removeAttribute('src');
       playback.load();
 
-      camera.classList.remove("hidden");
-      playback.classList.add("hidden");
+      camera.classList.remove('hidden');
+      playback.classList.add('hidden');
 
       seconds = 0;
       updateTimer();
@@ -387,83 +606,97 @@
       useVideoBtn.disabled = true;
 
       status.textContent =
-        "Camera ready. You can record again.";
+        'Camera ready. You can record again.';
     }
 
+    // =====================================================
     // SEND RECORDING TO SOMEDAY
+    // =====================================================
+
     function sendRecordingToSomeday() {
       if (!recordedBlob) {
         status.textContent =
-          "No recording available.";
-
+          'No recording available.';
         return;
       }
 
       if (recordedBlob.size > MAX_SIZE) {
         status.textContent =
-          "Video must be 10 MB or smaller.";
-
+          'Video must be 10 MB or smaller.';
         return;
       }
 
       if (!window.opener || window.opener.closed) {
         status.textContent =
-          "Please open this recorder from your SOMEDAY app.";
-
+          'Please open this recorder from your SOMEDAY app.';
         return;
       }
 
       try {
         window.opener.postMessage(
           {
-            type: "SOMEDAY_RECORDER_VIDEO",
+            type: 'SOMEDAY_RECORDER_VIDEO',
             video: recordedBlob,
             mimeType: recordedBlob.type
           },
-          "*"
+          '*'
         );
 
         useVideoBtn.disabled = true;
 
         status.textContent =
-          "Video sent to SOMEDAY. Return to your capsule.";
+          'Video sent to SOMEDAY. Return to your capsule.';
 
       } catch (error) {
         status.textContent =
-          "Unable to send video: " + error.message;
+          'Unable to send video: ' + error.message;
 
         console.error(error);
       }
     }
 
+    // =====================================================
     // EVENT LISTENERS
+    // =====================================================
+
     cameraBtn.addEventListener(
-      "click",
+      'click',
       enableCamera
     );
 
     recordBtn.addEventListener(
-      "click",
+      'click',
       startRecording
     );
 
     stopBtn.addEventListener(
-      "click",
+      'click',
       stopRecording
     );
 
     retakeBtn.addEventListener(
-      "click",
+      'click',
       retakeRecording
     );
 
     useVideoBtn.addEventListener(
-      "click",
+      'click',
       sendRecordingToSomeday
     );
 
+    // =====================================================
+    // INITIALIZE
+    // =====================================================
+
+    window.addEventListener('load', function() {
+      initializeGoogleSignIn();
+    });
+
+    // =====================================================
     // CLEANUP
-    window.addEventListener("beforeunload", () => {
+    // =====================================================
+
+    window.addEventListener('beforeunload', () => {
       clearInterval(timerInterval);
 
       if (stream) {
